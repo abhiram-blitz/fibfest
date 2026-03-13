@@ -1,7 +1,7 @@
 import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
-import { ref, set, push, onValue, onChildAdded, off, remove } from 'firebase/database';
+import { ref, set, push, onValue, onChildAdded, off, remove, onDisconnect } from 'firebase/database';
 import { db } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
@@ -71,10 +71,11 @@ export function GameProvider({ children }) {
     });
   }, []);
 
-  // Clean up all Firebase listeners
+  // Clean up all Firebase listeners and event handlers
   const cleanupListeners = useCallback(() => {
-    listenersRef.current.forEach(({ dbRef, callback }) => {
-      off(dbRef, 'value', callback);
+    listenersRef.current.forEach((listener) => {
+      if (listener.dbRef) off(listener.dbRef, 'value', listener.callback);
+      if (listener.cleanup) listener.cleanup();
     });
     listenersRef.current = [];
   }, []);
@@ -174,6 +175,20 @@ export function GameProvider({ children }) {
         }));
       }
 
+      if (action.type === 'LEAVE') {
+        const { playerId } = action;
+        hostUpdate(prev => {
+          const newPlayers = prev.players.filter(p => p.id !== playerId);
+          const newScores = { ...prev.scores };
+          delete newScores[playerId];
+          const newSubmissions = { ...prev.submissions };
+          delete newSubmissions[playerId];
+          const newVotes = { ...prev.votes };
+          delete newVotes[playerId];
+          return { ...prev, players: newPlayers, scores: newScores, submissions: newSubmissions, votes: newVotes };
+        });
+      }
+
       // Remove processed action
       remove(snapshot.ref);
     });
@@ -199,6 +214,17 @@ export function GameProvider({ children }) {
     // Send join action to host via Firebase
     const actionsRef = ref(db, `games/${code}/actions`);
     push(actionsRef, { type: 'JOIN', playerId, name });
+
+    // Set up onDisconnect to notify host if player loses connection
+    const leaveRef = push(ref(db, `games/${code}/actions`));
+    onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
+
+    // Also send LEAVE on tab close / navigation
+    const handleBeforeUnload = () => {
+      push(ref(db, `games/${code}/actions`), { type: 'LEAVE', playerId });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    listenersRef.current.push({ cleanup: () => window.removeEventListener('beforeunload', handleBeforeUnload) });
 
     // Listen for game state updates from host
     const stateDbRef = ref(db, `games/${code}/state`);
@@ -336,11 +362,13 @@ export function GameProvider({ children }) {
 
   // Reset everything
   const resetGame = useCallback(() => {
-    const code = stateRef.current.gameCode;
+    const { gameCode: code, role, playerId } = stateRef.current;
     cleanupListeners();
-    // Clean up Firebase data
-    if (code && stateRef.current.role === 'host') {
+    if (code && role === 'host') {
       remove(ref(db, `games/${code}`));
+    }
+    if (code && role === 'player' && playerId) {
+      push(ref(db, `games/${code}/actions`), { type: 'LEAVE', playerId });
     }
     setState(initState);
   }, [setState, cleanupListeners]);
