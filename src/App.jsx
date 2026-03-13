@@ -9,6 +9,7 @@ function GameRouter() {
   if (role === 'host') return <HostApp />;
   if (role === 'player') return <PlayerApp />;
   return <Home />;
+  
 }
 
 export default function App() {
