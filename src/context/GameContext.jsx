@@ -1,6 +1,8 @@
 import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
+import { ref, set, push, onValue, onChildAdded, off, remove } from 'firebase/database';
+import { db } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
 const GameContext = createContext();
@@ -26,15 +28,6 @@ function shuffle(arr) {
   return a;
 }
 
-// Message types sent over BroadcastChannel
-const MSG = {
-  STATE:        'STATE',        // host → players: full game state
-  JOIN:         'JOIN',         // player → host: { name }
-  ANSWER:       'ANSWER',       // player → host: { answer }
-  VOTE:         'VOTE',         // player → host: { answerIndex }
-  PING:         'PING',         // player → host: request latest state
-};
-
 const PHASE = {
   HOME:         'home',
   LOBBY:        'lobby',
@@ -46,21 +39,21 @@ const PHASE = {
 };
 
 const initState = {
-  role:                 null,   // 'host' | 'player'
+  role:                 null,
   phase:                PHASE.HOME,
   gameCode:             null,
   playerId:             null,
   playerName:           null,
-  players:              [],     // [{ id, name, color }]
+  players:              [],
   questions:            sampleQuestions,
-  totalQuestions:       10,     // how many questions to play
+  totalQuestions:       10,
   currentQuestionIndex: 0,
-  submissions:          {},     // { playerId: answerText }
-  shuffledAnswers:      [],     // [{ text, authorId, isReal }]
-  votes:                {},     // { playerId: answerIndex }
+  submissions:          {},
+  shuffledAnswers:      [],
+  votes:                {},
   roundResults:         null,
-  scores:               {},     // { playerId: cumulativeScore }
-  roundScores:          {},     // { playerId: pointsThisRound }
+  scores:               {},
+  roundScores:          {},
   error:                null,
 };
 
@@ -68,7 +61,7 @@ const initState = {
 export function GameProvider({ children }) {
   const [state, _setState] = useState(initState);
   const stateRef = useRef(state);
-  const channelRef = useRef(null);
+  const listenersRef = useRef([]);
 
   const setState = useCallback((updater) => {
     _setState(prev => {
@@ -78,54 +71,83 @@ export function GameProvider({ children }) {
     });
   }, []);
 
-  // Broadcast full state to all players (host only)
-  const broadcastState = useCallback((overrideState) => {
-    const s = overrideState || stateRef.current;
-    channelRef.current?.postMessage({ type: MSG.STATE, state: s });
+  // Clean up all Firebase listeners
+  const cleanupListeners = useCallback(() => {
+    listenersRef.current.forEach(({ dbRef, callback }) => {
+      off(dbRef, 'value', callback);
+    });
+    listenersRef.current = [];
   }, []);
 
-  // Helper: host updates state and immediately broadcasts it
+  // Helper: write game state to Firebase (host only)
+  const writeGameState = useCallback((gameState) => {
+    const code = gameState.gameCode || stateRef.current.gameCode;
+    if (!code) return;
+
+    const gameRef = ref(db, `games/${code}/state`);
+    // Write only the shared state (not role/playerId/playerName which are local)
+    set(gameRef, {
+      phase:                gameState.phase,
+      players:              gameState.players || [],
+      currentQuestionIndex: gameState.currentQuestionIndex,
+      submissions:          gameState.submissions || {},
+      shuffledAnswers:      gameState.shuffledAnswers || [],
+      votes:                gameState.votes || {},
+      roundResults:         gameState.roundResults || null,
+      scores:               gameState.scores || {},
+      roundScores:          gameState.roundScores || {},
+      totalQuestions:       gameState.totalQuestions,
+      questions:            gameState.questions,
+    });
+  }, []);
+
+  // Host: update state locally and write to Firebase
   const hostUpdate = useCallback((updater) => {
     _setState(prev => {
       const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater };
       stateRef.current = next;
-      channelRef.current?.postMessage({ type: MSG.STATE, state: next });
+      writeGameState(next);
       return next;
     });
-  }, []);
+  }, [writeGameState]);
 
-  // ── message handlers ──────────────────────────────────────────────────
-  const handleChannelMessage = useCallback((event) => {
-    const { type, state: remoteState, ...payload } = event.data;
-    const s = stateRef.current;
+  // ── PUBLIC API ────────────────────────────────────────────────────────
 
-    if (type === MSG.STATE && s.role === 'player') {
-      // Sync player state from host broadcast
-      setState(prev => ({
-        ...prev,
-        phase:                remoteState.phase,
-        players:              remoteState.players,
-        currentQuestionIndex: remoteState.currentQuestionIndex,
-        submissions:          remoteState.submissions,
-        shuffledAnswers:      remoteState.shuffledAnswers,
-        votes:                remoteState.votes,
-        roundResults:         remoteState.roundResults,
-        scores:               remoteState.scores,
-        roundScores:          remoteState.roundScores,
-        totalQuestions:       remoteState.totalQuestions,
-        questions:            remoteState.questions,
-      }));
-      return;
-    }
+  // Host: create a new game
+  const createGame = useCallback((numQuestions = 10) => {
+    const gameCode = rand4();
+    const selected = shuffle(sampleQuestions).slice(0, Math.min(numQuestions, sampleQuestions.length));
 
-    if (s.role === 'host') {
-      if (type === MSG.JOIN) {
-        const { playerId, name } = payload;
-        if (s.players.some(p => p.id === playerId)) {
-          broadcastState(); // re-send state so they sync
-          return;
-        }
+    const newState = {
+      ...initState,
+      role: 'host',
+      phase: PHASE.LOBBY,
+      gameCode,
+      questions: selected,
+      totalQuestions: selected.length,
+    };
+
+    setState(newState);
+
+    // Write initial state to Firebase
+    writeGameState(newState);
+
+    // Listen for player actions (join, answer, vote)
+    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    const handleAction = onChildAdded(actionsRef, (snapshot) => {
+      const action = snapshot.val();
+      if (!action) return;
+
+      const s = stateRef.current;
+      if (s.role !== 'host') return;
+
+      if (action.type === 'JOIN') {
+        const { playerId, name } = action;
+        if (s.players.some(p => p.id === playerId)) return;
+
         hostUpdate(prev => {
+          // Double-check inside updater to avoid race conditions
+          if (prev.players.some(p => p.id === playerId)) return prev;
           const colorIndex = prev.players.length % PLAYER_COLORS.length;
           const newPlayers = [
             ...prev.players,
@@ -134,62 +156,35 @@ export function GameProvider({ children }) {
           const newScores = { ...prev.scores, [playerId]: 0 };
           return { ...prev, players: newPlayers, scores: newScores };
         });
-        return;
       }
 
-      if (type === MSG.ANSWER) {
-        const { playerId, answer } = payload;
+      if (action.type === 'ANSWER') {
+        const { playerId, answer } = action;
         hostUpdate(prev => ({
           ...prev,
           submissions: { ...prev.submissions, [playerId]: answer },
         }));
-        return;
       }
 
-      if (type === MSG.VOTE) {
-        const { playerId, answerIndex } = payload;
-        hostUpdate(prev => {
-          const newVotes = { ...prev.votes, [playerId]: answerIndex };
-          return { ...prev, votes: newVotes };
-        });
-        return;
+      if (action.type === 'VOTE') {
+        const { playerId, answerIndex } = action;
+        hostUpdate(prev => ({
+          ...prev,
+          votes: { ...prev.votes, [playerId]: answerIndex },
+        }));
       }
 
-      if (type === MSG.PING) {
-        broadcastState();
-        return;
-      }
-    }
-  }, [setState, hostUpdate, broadcastState]);
-
-  // ── PUBLIC API ────────────────────────────────────────────────────────
-
-  // Host: create a new game
-  const createGame = useCallback((numQuestions = 10) => {
-    const gameCode = rand4();
-    const channel = new BroadcastChannel(`fibfest-${gameCode}`);
-    channel.onmessage = handleChannelMessage;
-    channelRef.current = channel;
-
-    const selected = shuffle(sampleQuestions).slice(0, Math.min(numQuestions, sampleQuestions.length));
-
-    setState({
-      ...initState,
-      role: 'host',
-      phase: PHASE.LOBBY,
-      gameCode,
-      questions: selected,
-      totalQuestions: selected.length,
+      // Remove processed action
+      remove(snapshot.ref);
     });
-  }, [handleChannelMessage, setState]);
+
+    listenersRef.current.push({ dbRef: actionsRef, callback: handleAction });
+  }, [setState, writeGameState, hostUpdate, cleanupListeners]);
 
   // Player: join an existing game by code + name
   const joinGame = useCallback((gameCode, name) => {
     const code = gameCode.toUpperCase().trim();
     const playerId = randId();
-    const channel = new BroadcastChannel(`fibfest-${code}`);
-    channel.onmessage = handleChannelMessage;
-    channelRef.current = channel;
 
     setState(prev => ({
       ...initState,
@@ -201,27 +196,53 @@ export function GameProvider({ children }) {
       scores: { [playerId]: 0 },
     }));
 
-    // Tell the host we joined
-    channel.postMessage({ type: MSG.JOIN, playerId, name });
+    // Send join action to host via Firebase
+    const actionsRef = ref(db, `games/${code}/actions`);
+    push(actionsRef, { type: 'JOIN', playerId, name });
 
-    // Request current state in case we're re-joining
-    setTimeout(() => channel.postMessage({ type: MSG.PING }), 200);
-  }, [handleChannelMessage, setState]);
+    // Listen for game state updates from host
+    const stateDbRef = ref(db, `games/${code}/state`);
+    const handleState = onValue(stateDbRef, (snapshot) => {
+      const remoteState = snapshot.val();
+      if (!remoteState) return;
+
+      setState(prev => {
+        if (prev.role !== 'player') return prev;
+        return {
+          ...prev,
+          phase:                remoteState.phase,
+          players:              remoteState.players || [],
+          currentQuestionIndex: remoteState.currentQuestionIndex,
+          submissions:          remoteState.submissions || {},
+          shuffledAnswers:      remoteState.shuffledAnswers || [],
+          votes:                remoteState.votes || {},
+          roundResults:         remoteState.roundResults || null,
+          scores:               remoteState.scores || {},
+          roundScores:          remoteState.roundScores || {},
+          totalQuestions:       remoteState.totalQuestions,
+          questions:            remoteState.questions,
+        };
+      });
+    });
+
+    listenersRef.current.push({ dbRef: stateDbRef, callback: handleState });
+  }, [setState, cleanupListeners]);
 
   // Host: start the game
   const startGame = useCallback(() => {
     hostUpdate(prev => ({ ...prev, phase: PHASE.ANSWERING, currentQuestionIndex: 0, submissions: {} }));
   }, [hostUpdate]);
 
-  // Player: submit a fake (or real) answer
+  // Player: submit an answer
   const submitAnswer = useCallback((answer) => {
-    const { playerId } = stateRef.current;
-    channelRef.current?.postMessage({ type: MSG.ANSWER, playerId, answer: answer.trim() });
-    // Optimistic local update so the player sees "submitted"
+    const { playerId, gameCode } = stateRef.current;
+    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    push(actionsRef, { type: 'ANSWER', playerId, answer: answer.trim() });
+    // Optimistic local update
     setState(prev => ({ ...prev, submissions: { ...prev.submissions, [playerId]: answer.trim() } }));
   }, [setState]);
 
-  // Host: move to voting phase — compile all answers + real answer, shuffle
+  // Host: move to voting phase
   const startVoting = useCallback(() => {
     hostUpdate(prev => {
       const q = prev.questions[prev.currentQuestionIndex];
@@ -236,10 +257,11 @@ export function GameProvider({ children }) {
     });
   }, [hostUpdate]);
 
-  // Player: vote for an answer by index
+  // Player: vote for an answer
   const submitVote = useCallback((answerIndex) => {
-    const { playerId } = stateRef.current;
-    channelRef.current?.postMessage({ type: MSG.VOTE, playerId, answerIndex });
+    const { playerId, gameCode } = stateRef.current;
+    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    push(actionsRef, { type: 'VOTE', playerId, answerIndex });
     setState(prev => ({ ...prev, votes: { ...prev.votes, [playerId]: answerIndex } }));
   }, [setState]);
 
@@ -248,13 +270,11 @@ export function GameProvider({ children }) {
     hostUpdate(prev => {
       const { shuffledAnswers, votes, players, scores } = prev;
 
-      // Build round results per answer
       const results = shuffledAnswers.map((ans, idx) => {
         const voters = players.filter(p => votes[p.id] === idx);
         return { ...ans, idx, voters };
       });
 
-      // Calculate round scores
       const roundScores = {};
       players.forEach(p => { roundScores[p.id] = 0; });
 
@@ -262,14 +282,11 @@ export function GameProvider({ children }) {
         const votedIdx = votes[player.id];
         if (votedIdx === undefined) return;
         const picked = shuffledAnswers[votedIdx];
-
         if (picked?.isReal) {
-          // Correctly identified the real answer
           roundScores[player.id] = (roundScores[player.id] || 0) + 1000;
         }
       });
 
-      // Award points to fib authors whose answer fooled people
       shuffledAnswers.forEach((ans, idx) => {
         if (ans.isReal) return;
         const fooled = players.filter(p => votes[p.id] === idx);
@@ -319,14 +336,18 @@ export function GameProvider({ children }) {
 
   // Reset everything
   const resetGame = useCallback(() => {
-    channelRef.current?.close();
-    channelRef.current = null;
+    const code = stateRef.current.gameCode;
+    cleanupListeners();
+    // Clean up Firebase data
+    if (code && stateRef.current.role === 'host') {
+      remove(ref(db, `games/${code}`));
+    }
     setState(initState);
-  }, [setState]);
+  }, [setState, cleanupListeners]);
 
   useEffect(() => {
-    return () => channelRef.current?.close();
-  }, []);
+    return () => cleanupListeners();
+  }, [cleanupListeners]);
 
   const value = {
     ...state,
@@ -334,7 +355,6 @@ export function GameProvider({ children }) {
     currentQuestion: state.questions[state.currentQuestionIndex],
     submittedCount: Object.keys(state.submissions).length,
     votedCount: Object.keys(state.votes).length,
-    // actions
     createGame,
     joinGame,
     startGame,
