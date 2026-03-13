@@ -2,13 +2,13 @@ import { initializeApp } from 'firebase/app';
 import { getDatabase } from 'firebase/database';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB_PBcdXqd8lZxRMla3UNCOX5zgRK048NU",
-  authDomain: "fibfest-3a2d4.firebaseapp.com",
-  databaseURL: "https://fibfest-3a2d4-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "fibfest-3a2d4",
-  storageBucket: "fibfest-3a2d4.firebasestorage.app",
-  messagingSenderId: "261124402163",
-  appId: "1:261124402163:web:508d7cfe53c71ffbc58086",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
