@@ -16,9 +16,10 @@ function QuestionText({ text }) {
 }
 
 export default function PlayerAnswer() {
-  const { currentQuestion, playerId, submissions, submitAnswer, players, playerName } = useGame();
+  const { currentQuestion, playerId, submissions, submitAnswer, players, playerName, submittedCount, submissionCap } = useGame();
   const [answer, setAnswer] = useState('');
   const hasSubmitted = !!submissions[playerId];
+  const submissionsClosed = submittedCount >= submissionCap && !hasSubmitted;
   const me = players.find(p => p.id === playerId);
 
   useEffect(() => { setAnswer(''); }, [currentQuestion?.id]);
@@ -30,6 +31,20 @@ export default function PlayerAnswer() {
   };
 
   if (!currentQuestion) return null;
+
+  if (submissionsClosed) {
+    return (
+      <div className="screen center">
+        <div className="card" style={{ maxWidth: 380 }}>
+          <div className="submitted-state">
+            <span className="submitted-icon">⏳</span>
+            <h3>Submissions closed!</h3>
+            <p className="hint-text">Enough answers are in — voting starts soon.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (hasSubmitted) {
     return (

@@ -28,6 +28,66 @@ function shuffle(arr) {
   return a;
 }
 
+// Submission cap: all players if ≤10, otherwise max(10, half)
+function getSubmissionCap(playerCount) {
+  if (playerCount <= 10) return playerCount;
+  return Math.max(10, Math.ceil(playerCount / 2));
+}
+
+// Simple string similarity (normalized Levenshtein-ish)
+function normalize(str) {
+  return str.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
+}
+
+function areSimilar(a, b) {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na === nb) return true;
+  // One contains the other
+  if (na.includes(nb) || nb.includes(na)) return true;
+  // Levenshtein distance for short strings
+  if (na.length < 40 && nb.length < 40) {
+    const dist = levenshtein(na, nb);
+    const maxLen = Math.max(na.length, nb.length);
+    if (maxLen > 0 && dist / maxLen <= 0.25) return true;
+  }
+  return false;
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Group similar answers, keeping the first one as representative
+function mergeSimilarAnswers(fakeAnswers) {
+  const groups = [];
+  for (const ans of fakeAnswers) {
+    let merged = false;
+    for (const group of groups) {
+      if (areSimilar(group.text, ans.text)) {
+        group.authorIds.push(ans.authorId);
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      groups.push({ text: ans.text, authorIds: [ans.authorId], isReal: false });
+    }
+  }
+  return groups;
+}
+
 const PHASE = {
   HOME:         'home',
   LOBBY:        'lobby',
@@ -161,10 +221,27 @@ export function GameProvider({ children }) {
 
       if (action.type === 'ANSWER') {
         const { playerId, answer } = action;
-        hostUpdate(prev => ({
-          ...prev,
-          submissions: { ...prev.submissions, [playerId]: answer },
-        }));
+        hostUpdate(prev => {
+          const newSubmissions = { ...prev.submissions, [playerId]: answer };
+          const cap = getSubmissionCap(prev.players.length);
+          const newCount = Object.keys(newSubmissions).length;
+
+          // Auto-close submissions when cap is reached
+          if (newCount >= cap && prev.phase === PHASE.ANSWERING) {
+            const q = prev.questions[prev.currentQuestionIndex];
+            const fakeAnswers = Object.entries(newSubmissions).map(([authorId, text]) => ({
+              text, authorId, isReal: false,
+            }));
+            const merged = mergeSimilarAnswers(fakeAnswers);
+            const allAnswers = shuffle([
+              ...merged,
+              { text: q.answer, authorIds: ['host'], isReal: true },
+            ]);
+            return { ...prev, submissions: newSubmissions, phase: PHASE.VOTING, shuffledAnswers: allAnswers, votes: {} };
+          }
+
+          return { ...prev, submissions: newSubmissions };
+        });
       }
 
       if (action.type === 'VOTE') {
@@ -275,9 +352,10 @@ export function GameProvider({ children }) {
       const fakeAnswers = Object.entries(prev.submissions).map(([authorId, text]) => ({
         text, authorId, isReal: false,
       }));
+      const merged = mergeSimilarAnswers(fakeAnswers);
       const allAnswers = shuffle([
-        ...fakeAnswers,
-        { text: q.answer, authorId: 'host', isReal: true },
+        ...merged,
+        { text: q.answer, authorIds: ['host'], isReal: true },
       ]);
       return { ...prev, phase: PHASE.VOTING, shuffledAnswers: allAnswers, votes: {} };
     });
@@ -317,7 +395,11 @@ export function GameProvider({ children }) {
         if (ans.isReal) return;
         const fooled = players.filter(p => votes[p.id] === idx);
         if (fooled.length > 0) {
-          roundScores[ans.authorId] = (roundScores[ans.authorId] || 0) + fooled.length * 500;
+          // authorIds is an array (merged similar answers share credit)
+          const authors = ans.authorIds || (ans.authorId ? [ans.authorId] : []);
+          authors.forEach(aid => {
+            roundScores[aid] = (roundScores[aid] || 0) + fooled.length * 500;
+          });
         }
       });
 
@@ -377,11 +459,14 @@ export function GameProvider({ children }) {
     return () => cleanupListeners();
   }, [cleanupListeners]);
 
+  const submissionCap = getSubmissionCap(state.players.length);
+
   const value = {
     ...state,
     PHASE,
     currentQuestion: state.questions[state.currentQuestionIndex],
     submittedCount: Object.keys(state.submissions).length,
+    submissionCap,
     votedCount: Object.keys(state.votes).length,
     createGame,
     joinGame,

@@ -18,14 +18,16 @@ function QuestionText({ text }) {
 export default function HostAnswering() {
   const {
     currentQuestion, currentQuestionIndex, questions,
-    players, submissions, submittedCount, startVoting,
+    players, submissions, submittedCount, submissionCap, startVoting,
   } = useGame();
 
   if (!currentQuestion) return null;
 
   const totalPlayers = players.length;
-  const pct = totalPlayers > 0 ? (submittedCount / totalPlayers) * 100 : 0;
+  const target = submissionCap;
+  const pct = target > 0 ? Math.min((submittedCount / target) * 100, 100) : 0;
   const allSubmitted = submittedCount >= totalPlayers && totalPlayers > 0;
+  const capReached = submittedCount >= target && target > 0;
 
   return (
     <div className="screen">
@@ -46,7 +48,8 @@ export default function HostAnswering() {
             <div className="progress-bar" style={{ width: `${pct}%` }} />
           </div>
           <p className="progress-label">
-            {submittedCount} / {totalPlayers} fibs submitted
+            {submittedCount} / {target} fibs submitted
+            {target < totalPlayers && <span style={{ opacity: 0.6 }}> (cap: first {target})</span>}
           </p>
         </div>
 
@@ -68,7 +71,7 @@ export default function HostAnswering() {
           onClick={startVoting}
           disabled={submittedCount === 0}
         >
-          {allSubmitted ? '✅ All in — Start Voting!' : `Start Voting (${submittedCount} submitted)`}
+          {capReached ? '✅ Cap reached — Start Voting!' : allSubmitted ? '✅ All in — Start Voting!' : `Start Voting (${submittedCount} submitted)`}
         </button>
         {submittedCount === 0 && (
           <p className="hint-text">Waiting for at least one answer...</p>
