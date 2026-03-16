@@ -1,7 +1,7 @@
 import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
-import { ref, set, push, get, onValue, onChildAdded, off, remove, onDisconnect } from 'firebase/database';
+import { ref, update, push, get, onValue, onChildAdded, remove, onDisconnect } from 'firebase/database';
 import { db } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
@@ -24,7 +24,6 @@ const clearSession = () => {
 };
 
 // Firebase drops empty arrays/objects and converts arrays to objects on round-trip.
-// This helper ensures we always get a proper array back.
 const toArray = (val) => {
   if (Array.isArray(val)) return val;
   if (val && typeof val === 'object') return Object.values(val);
@@ -47,13 +46,11 @@ function shuffle(arr) {
   return a;
 }
 
-// Submission cap: all players if ≤10, otherwise max(10, half)
 function getSubmissionCap(playerCount) {
   if (playerCount <= 10) return playerCount;
   return Math.max(10, Math.ceil(playerCount / 2));
 }
 
-// Simple string similarity (normalized Levenshtein-ish)
 function normalize(str) {
   return str.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
 }
@@ -62,9 +59,7 @@ function areSimilar(a, b) {
   const na = normalize(a);
   const nb = normalize(b);
   if (na === nb) return true;
-  // One contains the other
   if (na.includes(nb) || nb.includes(na)) return true;
-  // Levenshtein distance for short strings
   if (na.length < 40 && nb.length < 40) {
     const dist = levenshtein(na, nb);
     const maxLen = Math.max(na.length, nb.length);
@@ -88,7 +83,6 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-// Group similar answers, keeping the first one as representative
 function mergeSimilarAnswers(fakeAnswers) {
   const groups = [];
   for (const ans of fakeAnswers) {
@@ -139,11 +133,32 @@ const initState = {
   _currentQuestion:     null,
 };
 
+// Parse remote state from Firebase into local state shape
+function parseRemoteState(remoteState) {
+  const questions = toArray(remoteState.questions);
+  const idx = remoteState.currentQuestionIndex ?? 0;
+  return {
+    phase:                remoteState.phase,
+    players:              toArray(remoteState.players),
+    currentQuestionIndex: idx,
+    submissions:          remoteState.submissions || {},
+    shuffledAnswers:      remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
+    votes:                remoteState.votes || {},
+    roundResults:         remoteState.roundResults ? toArray(remoteState.roundResults) : null,
+    scores:               remoteState.scores || {},
+    roundScores:          remoteState.roundScores || {},
+    totalQuestions:       remoteState.totalQuestions,
+    questions,
+    _currentQuestion:     remoteState.currentQuestion || questions[idx] || null,
+  };
+}
+
 // ── provider ───────────────────────────────────────────────────────────────
 export function GameProvider({ children }) {
   const [state, _setState] = useState(initState);
   const stateRef = useRef(state);
-  const listenersRef = useRef([]);
+  // Store unsubscribe functions (not callbacks) for proper cleanup
+  const unsubscribesRef = useRef([]);
 
   const setState = useCallback((updater) => {
     _setState(prev => {
@@ -153,40 +168,41 @@ export function GameProvider({ children }) {
     });
   }, []);
 
-  // Clean up all Firebase listeners and event handlers
+  // Clean up all Firebase listeners — call each unsubscribe function directly
   const cleanupListeners = useCallback(() => {
-    listenersRef.current.forEach((listener) => {
-      if (listener.dbRef) off(listener.dbRef, 'value', listener.callback);
-      if (listener.cleanup) listener.cleanup();
+    unsubscribesRef.current.forEach(fn => {
+      try { fn(); } catch {}
     });
-    listenersRef.current = [];
+    unsubscribesRef.current = [];
   }, []);
 
-  // Helper: write game state to Firebase (host only)
+  // Helper: write game state to Firebase using update() to avoid null snapshots
   const writeGameState = useCallback((gameState) => {
     const code = gameState.gameCode || stateRef.current.gameCode;
     if (!code) return;
 
     const gameRef = ref(db, `games/${code}/state`);
-    // Write only the shared state (not role/playerId/playerName which are local)
-    // Use placeholder values for empty arrays so Firebase doesn't drop them
     const players = toArray(gameState.players);
     const questions = toArray(gameState.questions);
     const shuffled = toArray(gameState.shuffledAnswers);
-    set(gameRef, {
+    const idx = gameState.currentQuestionIndex ?? 0;
+
+    // Use update() instead of set() — update() does NOT emit null snapshots
+    update(gameRef, {
       phase:                gameState.phase,
-      players:              players.length > 0 ? players : [],
-      currentQuestionIndex: gameState.currentQuestionIndex ?? 0,
-      submissions:          gameState.submissions || {},
+      players:              players.length > 0 ? players : null,
+      currentQuestionIndex: idx,
+      submissions:          Object.keys(gameState.submissions || {}).length > 0 ? gameState.submissions : null,
       shuffledAnswers:      shuffled.length > 0 ? shuffled : null,
-      votes:                gameState.votes || {},
+      votes:                Object.keys(gameState.votes || {}).length > 0 ? gameState.votes : null,
       roundResults:         gameState.roundResults || null,
-      scores:               gameState.scores || {},
-      roundScores:          gameState.roundScores || {},
+      scores:               Object.keys(gameState.scores || {}).length > 0 ? gameState.scores : null,
+      roundScores:          Object.keys(gameState.roundScores || {}).length > 0 ? gameState.roundScores : null,
       totalQuestions:       gameState.totalQuestions,
       questions:            questions,
-      // Write current question directly so players don't depend on array indexing
-      currentQuestion:      questions[gameState.currentQuestionIndex ?? 0] || null,
+      currentQuestion:      questions[idx] || null,
+      // Monotonically increasing counter so players always see changes
+      _seq:                 Date.now(),
     });
   }, []);
 
@@ -217,13 +233,11 @@ export function GameProvider({ children }) {
     };
 
     setState(newState);
-
-    // Write initial state to Firebase
     writeGameState(newState);
 
     // Listen for player actions (join, answer, vote)
     const actionsRef = ref(db, `games/${gameCode}/actions`);
-    const handleAction = onChildAdded(actionsRef, (snapshot) => {
+    const unsub = onChildAdded(actionsRef, (snapshot) => {
       const action = snapshot.val();
       if (!action) return;
 
@@ -235,7 +249,6 @@ export function GameProvider({ children }) {
         if (s.players.some(p => p.id === playerId)) return;
 
         hostUpdate(prev => {
-          // Double-check inside updater to avoid race conditions
           if (prev.players.some(p => p.id === playerId)) return prev;
           if (prev.players.length >= MAX_PLAYERS) return prev;
           const colorIndex = prev.players.length % PLAYER_COLORS.length;
@@ -255,7 +268,6 @@ export function GameProvider({ children }) {
           const cap = getSubmissionCap(prev.players.length);
           const newCount = Object.keys(newSubmissions).length;
 
-          // Auto-close submissions when cap is reached
           if (newCount >= cap && prev.phase === PHASE.ANSWERING) {
             const q = prev.questions[prev.currentQuestionIndex];
             const fakeAnswers = Object.entries(newSubmissions).map(([authorId, text]) => ({
@@ -301,11 +313,10 @@ export function GameProvider({ children }) {
         });
       }
 
-      // Remove processed action
       remove(snapshot.ref);
     });
 
-    listenersRef.current.push({ dbRef: actionsRef, callback: handleAction });
+    unsubscribesRef.current.push(unsub);
   }, [setState, writeGameState, hostUpdate, cleanupListeners]);
 
   // Player: join an existing game by code + name
@@ -313,7 +324,7 @@ export function GameProvider({ children }) {
     const code = gameCode.toUpperCase().trim();
     const playerId = randId();
 
-    setState(prev => ({
+    setState({
       ...initState,
       role: 'player',
       phase: PHASE.LOBBY,
@@ -321,12 +332,10 @@ export function GameProvider({ children }) {
       playerId,
       playerName: name,
       scores: { [playerId]: 0 },
-    }));
+    });
 
-    // Persist session for rejoin
     saveSession(code, playerId, name);
 
-    // Send join action to host via Firebase
     const actionsRef = ref(db, `games/${code}/actions`);
     push(actionsRef, { type: 'JOIN', playerId, name });
 
@@ -335,53 +344,43 @@ export function GameProvider({ children }) {
 
   // Shared: attach Firebase listeners for a player session
   const attachPlayerListeners = useCallback((code, playerId) => {
-    // Set up onDisconnect to notify host if player loses connection
-    // (marks as disconnected, not removed — allows rejoin)
     const leaveRef = push(ref(db, `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
 
     // Listen for game state updates from host
     const stateDbRef = ref(db, `games/${code}/state`);
-    let nullCount = 0;
-    const handleState = onValue(stateDbRef, (snapshot) => {
+    const unsub = onValue(stateDbRef, (snapshot) => {
       const remoteState = snapshot.val();
-      if (!remoteState) {
-        // Firebase may briefly emit null during a host write (set() replacement).
-        // Only treat the game as truly gone after multiple consecutive nulls.
-        nullCount++;
-        if (nullCount >= 3) {
-          clearSession();
-          _setState(initState);
-        }
-        return;
-      }
-      nullCount = 0; // reset on valid data
+      // Ignore null snapshots entirely — they're transient during writes
+      // Game deletion is handled by admin reset, not by watching for nulls
+      if (!remoteState) return;
 
       setState(prev => {
         if (prev.role !== 'player') return prev;
-        const questions = toArray(remoteState.questions);
-        const idx = remoteState.currentQuestionIndex ?? 0;
-        return {
-          ...prev,
-          phase:                remoteState.phase,
-          players:              toArray(remoteState.players),
-          currentQuestionIndex: idx,
-          submissions:          remoteState.submissions || {},
-          shuffledAnswers:      remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
-          votes:                remoteState.votes || {},
-          roundResults:         remoteState.roundResults ? toArray(remoteState.roundResults) : null,
-          scores:               remoteState.scores || {},
-          roundScores:          remoteState.roundScores || {},
-          totalQuestions:       remoteState.totalQuestions,
-          questions:            questions,
-          // Use the pre-computed currentQuestion from host as primary source
-          _currentQuestion:     remoteState.currentQuestion || questions[idx] || null,
-        };
+        return { ...prev, ...parseRemoteState(remoteState) };
       });
     });
 
-    listenersRef.current.push({ dbRef: stateDbRef, callback: handleState });
-  }, [setState, cleanupListeners]);
+    // Store the actual unsubscribe function
+    unsubscribesRef.current.push(unsub);
+  }, [setState]);
+
+  // Player: manually sync state from Firebase (fallback if listener missed an update)
+  const syncState = useCallback(() => {
+    const { gameCode, role } = stateRef.current;
+    if (role !== 'player' || !gameCode) return;
+
+    const stateDbRef = ref(db, `games/${gameCode}/state`);
+    get(stateDbRef).then(snapshot => {
+      const remoteState = snapshot.val();
+      if (!remoteState) return;
+
+      setState(prev => {
+        if (prev.role !== 'player') return prev;
+        return { ...prev, ...parseRemoteState(remoteState) };
+      });
+    });
+  }, [setState]);
 
   // Host: start the game
   const startGame = useCallback(() => {
@@ -393,7 +392,6 @@ export function GameProvider({ children }) {
     const { playerId, gameCode } = stateRef.current;
     const actionsRef = ref(db, `games/${gameCode}/actions`);
     push(actionsRef, { type: 'ANSWER', playerId, answer: answer.trim() });
-    // Optimistic local update
     setState(prev => ({ ...prev, submissions: { ...prev.submissions, [playerId]: answer.trim() } }));
   }, [setState]);
 
@@ -447,7 +445,6 @@ export function GameProvider({ children }) {
         if (ans.isReal) return;
         const fooled = players.filter(p => votes[p.id] === idx);
         if (fooled.length > 0) {
-          // authorIds is an array (merged similar answers share credit)
           const authors = ans.authorIds || (ans.authorId ? [ans.authorId] : []);
           authors.forEach(aid => {
             roundScores[aid] = (roundScores[aid] || 0) + fooled.length * 500;
@@ -489,7 +486,7 @@ export function GameProvider({ children }) {
     hostUpdate(prev => ({ ...prev, phase: PHASE.LEADERBOARD }));
   }, [hostUpdate]);
 
-  // Return to answering from leaderboard (keep current question state intact)
+  // Return to answering from leaderboard
   const continueGame = useCallback(() => {
     hostUpdate(prev => ({
       ...prev,
@@ -516,14 +513,13 @@ export function GameProvider({ children }) {
     setState(initState);
   }, [setState, cleanupListeners]);
 
-  // Check for saved session on mount (don't auto-rejoin, just store the pending session)
+  // Check for saved session on mount
   const [pendingSession, setPendingSession] = useState(null);
   useEffect(() => {
     const session = loadSession();
     if (!session) return;
     const { gameCode } = session;
 
-    // Verify game still exists
     const stateDbRef = ref(db, `games/${gameCode}/state`);
     get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
@@ -557,26 +553,13 @@ export function GameProvider({ children }) {
         return;
       }
 
-      const questions = toArray(remoteState.questions);
-      const idx = remoteState.currentQuestionIndex ?? 0;
       setState({
         ...initState,
         role: 'player',
-        phase: remoteState.phase,
         gameCode,
         playerId,
         playerName,
-        players: toArray(remoteState.players),
-        currentQuestionIndex: idx,
-        submissions: remoteState.submissions || {},
-        shuffledAnswers: remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
-        votes: remoteState.votes || {},
-        roundResults: remoteState.roundResults ? toArray(remoteState.roundResults) : null,
-        scores: remoteState.scores || {},
-        roundScores: remoteState.roundScores || {},
-        totalQuestions: remoteState.totalQuestions,
-        questions,
-        _currentQuestion: remoteState.currentQuestion || questions[idx] || null,
+        ...parseRemoteState(remoteState),
       });
 
       push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
@@ -587,7 +570,7 @@ export function GameProvider({ children }) {
     });
   }, [pendingSession, setState, attachPlayerListeners]);
 
-  // Dismiss pending session (start fresh)
+  // Dismiss pending session
   const dismissSession = useCallback(() => {
     clearSession();
     setPendingSession(null);
@@ -620,6 +603,7 @@ export function GameProvider({ children }) {
     rejoinSession,
     dismissSession,
     adminClearAllGames,
+    syncState,
     createGame,
     joinGame,
     startGame,

@@ -6,9 +6,15 @@ import PlayerVote from './PlayerVote';
 import PlayerResults from './PlayerResults';
 import PlayerFinal from './PlayerFinal';
 import PlayerWaiting from './PlayerWaiting';
+import PlayerSync from './PlayerSync';
 
 export default function PlayerApp() {
-  const { phase, PHASE } = useGame();
+  const { phase, PHASE, currentQuestion } = useGame();
+
+  // If we're in ANSWERING but have no question data, show sync button
+  if (phase === PHASE.ANSWERING && !currentQuestion) {
+    return <PlayerSync />;
+  }
 
   switch (phase) {
     case PHASE.LOBBY:       return <PlayerLobby />;
@@ -17,6 +23,6 @@ export default function PlayerApp() {
     case PHASE.RESULTS:
     case PHASE.LEADERBOARD: return <PlayerResults />;
     case PHASE.FINAL:       return <PlayerFinal />;
-    default:                return <PlayerWaiting message="Waiting for host..." icon="⏳" />;
+    default:                return <PlayerSync />;
   }
 }
