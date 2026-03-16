@@ -333,15 +333,9 @@ export function GameProvider({ children }) {
   // Shared: attach Firebase listeners for a player session
   const attachPlayerListeners = useCallback((code, playerId) => {
     // Set up onDisconnect to notify host if player loses connection
+    // (marks as disconnected, not removed — allows rejoin)
     const leaveRef = push(ref(db, `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
-
-    // Also send LEAVE on tab close / navigation
-    const handleBeforeUnload = () => {
-      push(ref(db, `games/${code}/actions`), { type: 'LEAVE', playerId });
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    listenersRef.current.push({ cleanup: () => window.removeEventListener('beforeunload', handleBeforeUnload) });
 
     // Listen for game state updates from host
     const stateDbRef = ref(db, `games/${code}/state`);
