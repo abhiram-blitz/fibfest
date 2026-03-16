@@ -30,7 +30,14 @@ export default function PlayerAnswer() {
     submitAnswer(answer);
   };
 
-  if (!currentQuestion) return null;
+  if (!currentQuestion) return (
+    <div className="screen center">
+      <div className="card" style={{ maxWidth: 380, textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⏳</div>
+        <p className="waiting-message">Loading question...</p>
+      </div>
+    </div>
+  );
 
   if (submissionsClosed) {
     return (

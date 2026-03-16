@@ -1,7 +1,7 @@
 import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
-import { ref, set, push, onValue, onChildAdded, off, remove, onDisconnect } from 'firebase/database';
+import { ref, set, push, get, onValue, onChildAdded, off, remove, onDisconnect } from 'firebase/database';
 import { db } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
@@ -21,6 +21,14 @@ const loadSession = () => {
 };
 const clearSession = () => {
   try { localStorage.removeItem(SESSION_KEY); } catch {}
+};
+
+// Firebase drops empty arrays/objects and converts arrays to objects on round-trip.
+// This helper ensures we always get a proper array back.
+const toArray = (val) => {
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === 'object') return Object.values(val);
+  return [];
 };
 
 export const PLAYER_COLORS = [
@@ -160,18 +168,22 @@ export function GameProvider({ children }) {
 
     const gameRef = ref(db, `games/${code}/state`);
     // Write only the shared state (not role/playerId/playerName which are local)
+    // Use placeholder values for empty arrays so Firebase doesn't drop them
+    const players = toArray(gameState.players);
+    const questions = toArray(gameState.questions);
+    const shuffled = toArray(gameState.shuffledAnswers);
     set(gameRef, {
       phase:                gameState.phase,
-      players:              gameState.players || [],
-      currentQuestionIndex: gameState.currentQuestionIndex,
+      players:              players.length > 0 ? players : [],
+      currentQuestionIndex: gameState.currentQuestionIndex ?? 0,
       submissions:          gameState.submissions || {},
-      shuffledAnswers:      gameState.shuffledAnswers || [],
+      shuffledAnswers:      shuffled.length > 0 ? shuffled : null,
       votes:                gameState.votes || {},
       roundResults:         gameState.roundResults || null,
       scores:               gameState.scores || {},
       roundScores:          gameState.roundScores || {},
       totalQuestions:       gameState.totalQuestions,
-      questions:            gameState.questions,
+      questions:            questions,
     });
   }, []);
 
@@ -348,16 +360,16 @@ export function GameProvider({ children }) {
         return {
           ...prev,
           phase:                remoteState.phase,
-          players:              remoteState.players || [],
-          currentQuestionIndex: remoteState.currentQuestionIndex,
+          players:              toArray(remoteState.players),
+          currentQuestionIndex: remoteState.currentQuestionIndex ?? 0,
           submissions:          remoteState.submissions || {},
-          shuffledAnswers:      remoteState.shuffledAnswers || [],
+          shuffledAnswers:      remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
           votes:                remoteState.votes || {},
-          roundResults:         remoteState.roundResults || null,
+          roundResults:         remoteState.roundResults ? toArray(remoteState.roundResults) : null,
           scores:               remoteState.scores || {},
           roundScores:          remoteState.roundScores || {},
           totalQuestions:       remoteState.totalQuestions,
-          questions:            remoteState.questions,
+          questions:            toArray(remoteState.questions),
         };
       });
     });
@@ -504,10 +516,9 @@ export function GameProvider({ children }) {
     if (!session) return;
     const { gameCode, playerId, playerName } = session;
 
-    // Check if the game still exists in Firebase
+    // One-shot check if the game still exists in Firebase
     const stateDbRef = ref(db, `games/${gameCode}/state`);
-    const unsub = onValue(stateDbRef, (snapshot) => {
-      off(stateDbRef, 'value', unsub); // one-shot check
+    get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
       if (!remoteState) {
         clearSession();
@@ -515,7 +526,7 @@ export function GameProvider({ children }) {
       }
 
       // Check if this player is still in the game
-      const players = remoteState.players || [];
+      const players = toArray(remoteState.players);
       const me = players.find(p => p.id === playerId);
       if (!me) {
         clearSession();
@@ -523,29 +534,31 @@ export function GameProvider({ children }) {
       }
 
       // Rejoin: restore local state and re-attach listeners
-      setState(prev => ({
+      setState({
         ...initState,
         role: 'player',
         phase: remoteState.phase,
         gameCode,
         playerId,
         playerName,
-        players: remoteState.players || [],
-        currentQuestionIndex: remoteState.currentQuestionIndex,
+        players,
+        currentQuestionIndex: remoteState.currentQuestionIndex ?? 0,
         submissions: remoteState.submissions || {},
-        shuffledAnswers: remoteState.shuffledAnswers || [],
+        shuffledAnswers: toArray(remoteState.shuffledAnswers),
         votes: remoteState.votes || {},
-        roundResults: remoteState.roundResults || null,
+        roundResults: remoteState.roundResults ? toArray(remoteState.roundResults) : null,
         scores: remoteState.scores || {},
         roundScores: remoteState.roundScores || {},
         totalQuestions: remoteState.totalQuestions,
-        questions: remoteState.questions,
-      }));
+        questions: toArray(remoteState.questions),
+      });
 
       // Notify host that player is back
       push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
 
       attachPlayerListeners(gameCode, playerId);
+    }).catch(() => {
+      clearSession();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
