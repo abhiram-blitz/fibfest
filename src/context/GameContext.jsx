@@ -2,7 +2,7 @@ import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
 import { ref, update, push, get, onChildAdded, remove, onDisconnect } from 'firebase/database';
-import { db } from '../firebase';
+import { getDb } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
 const GameContext = createContext();
@@ -161,7 +161,7 @@ export function GameProvider({ children }) {
     const code = gameState.gameCode || stateRef.current.gameCode;
     if (!code) return;
 
-    const gameRef = ref(db, `games/${code}/state`);
+    const gameRef = ref(getDb(), `games/${code}/state`);
     const players = toArray(gameState.players);
     const questions = toArray(gameState.questions);
     const shuffled = toArray(gameState.shuffledAnswers);
@@ -216,7 +216,7 @@ export function GameProvider({ children }) {
     writeGameState(newState);
 
     // Listen for player actions (join, answer, vote)
-    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    const actionsRef = ref(getDb(), `games/${gameCode}/actions`);
     const unsub = onChildAdded(actionsRef, (snapshot) => {
       const action = snapshot.val();
       if (!action) return;
@@ -301,7 +301,7 @@ export function GameProvider({ children }) {
 
   // Player: set up presence (onDisconnect only, no state syncing)
   const attachPlayerListeners = useCallback((code, playerId) => {
-    const leaveRef = push(ref(db, `games/${code}/actions`));
+    const leaveRef = push(ref(getDb(), `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
   }, []);
 
@@ -311,7 +311,7 @@ export function GameProvider({ children }) {
     const playerId = randId();
 
     // Fetch game data once from Firebase
-    const stateDbRef = ref(db, `games/${code}/state`);
+    const stateDbRef = ref(getDb(), `games/${code}/state`);
     get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
       if (!remoteState) {
@@ -337,7 +337,7 @@ export function GameProvider({ children }) {
       saveSession(code, playerId, name);
 
       // Send join action to host
-      const actionsRef = ref(db, `games/${code}/actions`);
+      const actionsRef = ref(getDb(), `games/${code}/actions`);
       push(actionsRef, { type: 'JOIN', playerId, name });
 
       // Set up disconnect presence
@@ -377,7 +377,7 @@ export function GameProvider({ children }) {
   // Player: submit an answer
   const submitAnswer = useCallback((answer) => {
     const { playerId, gameCode } = stateRef.current;
-    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    const actionsRef = ref(getDb(), `games/${gameCode}/actions`);
     push(actionsRef, { type: 'ANSWER', playerId, answer: answer.trim() });
     setState(prev => ({ ...prev, submissions: { ...prev.submissions, [playerId]: answer.trim() } }));
   }, [setState]);
@@ -401,7 +401,7 @@ export function GameProvider({ children }) {
   // Player: vote for an answer
   const submitVote = useCallback((answerIndex) => {
     const { playerId, gameCode } = stateRef.current;
-    const actionsRef = ref(db, `games/${gameCode}/actions`);
+    const actionsRef = ref(getDb(), `games/${gameCode}/actions`);
     push(actionsRef, { type: 'VOTE', playerId, answerIndex });
     setState(prev => ({ ...prev, votes: { ...prev.votes, [playerId]: answerIndex } }));
   }, [setState]);
@@ -492,10 +492,10 @@ export function GameProvider({ children }) {
     cleanupListeners();
     clearSession();
     if (code && role === 'host') {
-      remove(ref(db, `games/${code}`));
+      remove(ref(getDb(), `games/${code}`));
     }
     if (code && role === 'player' && playerId) {
-      push(ref(db, `games/${code}/actions`), { type: 'LEAVE', playerId });
+      push(ref(getDb(), `games/${code}/actions`), { type: 'LEAVE', playerId });
     }
     setState(initState);
   }, [setState, cleanupListeners]);
@@ -507,7 +507,7 @@ export function GameProvider({ children }) {
     if (!session) return;
     const { gameCode } = session;
 
-    const stateDbRef = ref(db, `games/${gameCode}/state`);
+    const stateDbRef = ref(getDb(), `games/${gameCode}/state`);
     get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
       if (!remoteState) {
@@ -532,7 +532,7 @@ export function GameProvider({ children }) {
     const { gameCode, playerId, playerName } = pendingSession;
     setPendingSession(null);
 
-    const stateDbRef = ref(db, `games/${gameCode}/state`);
+    const stateDbRef = ref(getDb(), `games/${gameCode}/state`);
     get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
       if (!remoteState) {
@@ -555,7 +555,7 @@ export function GameProvider({ children }) {
         _currentQuestion: questions[0] || null,
       });
 
-      push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
+      push(ref(getDb(), `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
       attachPlayerListeners(gameCode, playerId);
     }).catch(() => {
       clearSession();
@@ -571,7 +571,7 @@ export function GameProvider({ children }) {
 
   // Admin: clear all games from Firebase
   const adminClearAllGames = useCallback(() => {
-    remove(ref(db, 'games'));
+    remove(ref(getDb(), 'games'));
     clearSession();
     cleanupListeners();
     setState(initState);

@@ -11,14 +11,18 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Use var to avoid TDZ issues — var is hoisted and initialized to undefined
-var db;
-try {
-  var app = initializeApp(firebaseConfig);
-  db = getDatabase(app);
-} catch (err) {
-  console.error('Firebase init failed:', err);
-  db = null;
-}
+let _db = null;
+let _initialized = false;
 
-export { db };
+export function getDb() {
+  if (!_initialized) {
+    _initialized = true;
+    try {
+      const app = initializeApp(firebaseConfig);
+      _db = getDatabase(app);
+    } catch (err) {
+      console.error('Firebase init failed:', err);
+    }
+  }
+  return _db;
+}
