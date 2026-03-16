@@ -299,6 +299,12 @@ export function GameProvider({ children }) {
     unsubscribesRef.current.push(unsub);
   }, [setState, writeGameState, hostUpdate, cleanupListeners]);
 
+  // Player: set up presence (onDisconnect only, no state syncing)
+  const attachPlayerListeners = useCallback((code, playerId) => {
+    const leaveRef = push(ref(db, `games/${code}/actions`));
+    onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
+  }, []);
+
   // Player: join an existing game by code + name
   const joinGame = useCallback((gameCode, name) => {
     const code = gameCode.toUpperCase().trim();
@@ -340,12 +346,6 @@ export function GameProvider({ children }) {
       setState(prev => ({ ...prev, error: 'Could not connect to game' }));
     });
   }, [setState, attachPlayerListeners]);
-
-  // Player: set up presence (onDisconnect only, no state syncing)
-  const attachPlayerListeners = useCallback((code, playerId) => {
-    const leaveRef = push(ref(db, `games/${code}/actions`));
-    onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
-  }, []);
 
   // Player: advance to the next question locally (no Firebase needed)
   const playerNextQuestion = useCallback(() => {
