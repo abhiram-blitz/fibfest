@@ -136,6 +136,7 @@ const initState = {
   scores:               {},
   roundScores:          {},
   error:                null,
+  _currentQuestion:     null,
 };
 
 // ── provider ───────────────────────────────────────────────────────────────
@@ -184,6 +185,8 @@ export function GameProvider({ children }) {
       roundScores:          gameState.roundScores || {},
       totalQuestions:       gameState.totalQuestions,
       questions:            questions,
+      // Write current question directly so players don't depend on array indexing
+      currentQuestion:      questions[gameState.currentQuestionIndex ?? 0] || null,
     });
   }, []);
 
@@ -351,11 +354,13 @@ export function GameProvider({ children }) {
 
       setState(prev => {
         if (prev.role !== 'player') return prev;
+        const questions = toArray(remoteState.questions);
+        const idx = remoteState.currentQuestionIndex ?? 0;
         return {
           ...prev,
           phase:                remoteState.phase,
           players:              toArray(remoteState.players),
-          currentQuestionIndex: remoteState.currentQuestionIndex ?? 0,
+          currentQuestionIndex: idx,
           submissions:          remoteState.submissions || {},
           shuffledAnswers:      remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
           votes:                remoteState.votes || {},
@@ -363,7 +368,9 @@ export function GameProvider({ children }) {
           scores:               remoteState.scores || {},
           roundScores:          remoteState.roundScores || {},
           totalQuestions:       remoteState.totalQuestions,
-          questions:            toArray(remoteState.questions),
+          questions:            questions,
+          // Use the pre-computed currentQuestion from host as primary source
+          _currentQuestion:     remoteState.currentQuestion || questions[idx] || null,
         };
       });
     });
@@ -545,6 +552,8 @@ export function GameProvider({ children }) {
         return;
       }
 
+      const questions = toArray(remoteState.questions);
+      const idx = remoteState.currentQuestionIndex ?? 0;
       setState({
         ...initState,
         role: 'player',
@@ -553,7 +562,7 @@ export function GameProvider({ children }) {
         playerId,
         playerName,
         players: toArray(remoteState.players),
-        currentQuestionIndex: remoteState.currentQuestionIndex ?? 0,
+        currentQuestionIndex: idx,
         submissions: remoteState.submissions || {},
         shuffledAnswers: remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
         votes: remoteState.votes || {},
@@ -561,7 +570,8 @@ export function GameProvider({ children }) {
         scores: remoteState.scores || {},
         roundScores: remoteState.roundScores || {},
         totalQuestions: remoteState.totalQuestions,
-        questions: toArray(remoteState.questions),
+        questions,
+        _currentQuestion: remoteState.currentQuestion || questions[idx] || null,
       });
 
       push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
@@ -597,7 +607,7 @@ export function GameProvider({ children }) {
     ...state,
     PHASE,
     MAX_PLAYERS,
-    currentQuestion: state.questions[state.currentQuestionIndex],
+    currentQuestion: state._currentQuestion || state.questions[state.currentQuestionIndex] || null,
     submittedCount: Object.keys(state.submissions).length,
     submissionCap,
     votedCount: Object.keys(state.votes).length,
