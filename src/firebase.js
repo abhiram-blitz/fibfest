@@ -11,14 +11,5 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-let app;
-let db;
-
-try {
-  app = initializeApp(firebaseConfig);
-  db = getDatabase(app);
-} catch (err) {
-  console.error('Firebase init failed:', err);
-}
-
-export { db };
+const app = initializeApp(firebaseConfig);
+export const db = getDatabase(app);
