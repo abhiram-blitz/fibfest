@@ -44,8 +44,8 @@ export default function HostLobby() {
           ) : (
             <ul className="player-grid">
               {players.map(p => (
-                <li key={p.id} className="player-chip" style={{ background: p.color }}>
-                  {p.name}
+                <li key={p.id} className="player-chip" style={{ background: p.color, opacity: p.disconnected ? 0.4 : 1 }}>
+                  {p.name}{p.disconnected ? ' (offline)' : ''}
                 </li>
               ))}
             </ul>

@@ -12,6 +12,17 @@ export const useGame = () => useContext(GameContext);
 const rand4 = () => Math.random().toString(36).substring(2, 6).toUpperCase();
 const randId = () => Math.random().toString(36).substring(2, 10);
 
+const SESSION_KEY = 'fibfest_session';
+const saveSession = (gameCode, playerId, playerName) => {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ gameCode, playerId, playerName })); } catch {}
+};
+const loadSession = () => {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; }
+};
+const clearSession = () => {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+};
+
 export const PLAYER_COLORS = [
   '#ff6b6b','#ffd93d','#6bcb77','#4d96ff','#ff9f1c',
   '#a855f7','#06b6d4','#f97316','#84cc16','#ec4899',
@@ -258,14 +269,20 @@ export function GameProvider({ children }) {
       if (action.type === 'LEAVE') {
         const { playerId } = action;
         hostUpdate(prev => {
-          const newPlayers = prev.players.filter(p => p.id !== playerId);
-          const newScores = { ...prev.scores };
-          delete newScores[playerId];
-          const newSubmissions = { ...prev.submissions };
-          delete newSubmissions[playerId];
-          const newVotes = { ...prev.votes };
-          delete newVotes[playerId];
-          return { ...prev, players: newPlayers, scores: newScores, submissions: newSubmissions, votes: newVotes };
+          const newPlayers = prev.players.map(p =>
+            p.id === playerId ? { ...p, disconnected: true } : p
+          );
+          return { ...prev, players: newPlayers };
+        });
+      }
+
+      if (action.type === 'REJOIN') {
+        const { playerId } = action;
+        hostUpdate(prev => {
+          const newPlayers = prev.players.map(p =>
+            p.id === playerId ? { ...p, disconnected: false } : p
+          );
+          return { ...prev, players: newPlayers };
         });
       }
 
@@ -291,10 +308,18 @@ export function GameProvider({ children }) {
       scores: { [playerId]: 0 },
     }));
 
+    // Persist session for rejoin
+    saveSession(code, playerId, name);
+
     // Send join action to host via Firebase
     const actionsRef = ref(db, `games/${code}/actions`);
     push(actionsRef, { type: 'JOIN', playerId, name });
 
+    attachPlayerListeners(code, playerId);
+  }, [setState, cleanupListeners]);
+
+  // Shared: attach Firebase listeners for a player session
+  const attachPlayerListeners = useCallback((code, playerId) => {
     // Set up onDisconnect to notify host if player loses connection
     const leaveRef = push(ref(db, `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
@@ -310,7 +335,13 @@ export function GameProvider({ children }) {
     const stateDbRef = ref(db, `games/${code}/state`);
     const handleState = onValue(stateDbRef, (snapshot) => {
       const remoteState = snapshot.val();
-      if (!remoteState) return;
+      if (!remoteState) {
+        // Game no longer exists — clear session and go home
+        clearSession();
+        cleanupListeners();
+        _setState(initState);
+        return;
+      }
 
       setState(prev => {
         if (prev.role !== 'player') return prev;
@@ -457,6 +488,7 @@ export function GameProvider({ children }) {
   const resetGame = useCallback(() => {
     const { gameCode: code, role, playerId } = stateRef.current;
     cleanupListeners();
+    clearSession();
     if (code && role === 'host') {
       remove(ref(db, `games/${code}`));
     }
@@ -465,6 +497,58 @@ export function GameProvider({ children }) {
     }
     setState(initState);
   }, [setState, cleanupListeners]);
+
+  // Auto-rejoin on mount if a saved session exists
+  useEffect(() => {
+    const session = loadSession();
+    if (!session) return;
+    const { gameCode, playerId, playerName } = session;
+
+    // Check if the game still exists in Firebase
+    const stateDbRef = ref(db, `games/${gameCode}/state`);
+    const unsub = onValue(stateDbRef, (snapshot) => {
+      off(stateDbRef, 'value', unsub); // one-shot check
+      const remoteState = snapshot.val();
+      if (!remoteState) {
+        clearSession();
+        return;
+      }
+
+      // Check if this player is still in the game
+      const players = remoteState.players || [];
+      const me = players.find(p => p.id === playerId);
+      if (!me) {
+        clearSession();
+        return;
+      }
+
+      // Rejoin: restore local state and re-attach listeners
+      setState(prev => ({
+        ...initState,
+        role: 'player',
+        phase: remoteState.phase,
+        gameCode,
+        playerId,
+        playerName,
+        players: remoteState.players || [],
+        currentQuestionIndex: remoteState.currentQuestionIndex,
+        submissions: remoteState.submissions || {},
+        shuffledAnswers: remoteState.shuffledAnswers || [],
+        votes: remoteState.votes || {},
+        roundResults: remoteState.roundResults || null,
+        scores: remoteState.scores || {},
+        roundScores: remoteState.roundScores || {},
+        totalQuestions: remoteState.totalQuestions,
+        questions: remoteState.questions,
+      }));
+
+      // Notify host that player is back
+      push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
+
+      attachPlayerListeners(gameCode, playerId);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     return () => cleanupListeners();
