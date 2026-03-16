@@ -440,9 +440,17 @@ export function GameProvider({ children }) {
     hostUpdate(prev => ({ ...prev, phase: PHASE.LEADERBOARD }));
   }, [hostUpdate]);
 
-  // Return to answering from leaderboard
+  // Return to answering from leaderboard (keep current question state intact)
   const continueGame = useCallback(() => {
-    hostUpdate(prev => ({ ...prev, phase: PHASE.ANSWERING }));
+    hostUpdate(prev => ({
+      ...prev,
+      phase: PHASE.ANSWERING,
+      submissions: {},
+      shuffledAnswers: [],
+      votes: {},
+      roundResults: null,
+      roundScores: {},
+    }));
   }, [hostUpdate]);
 
   // Reset everything

@@ -2,7 +2,7 @@ import React from 'react';
 import { useGame } from '../../context/GameContext';
 
 export default function HostLobby() {
-  const { gameCode, players, startGame, resetGame, questions } = useGame();
+  const { gameCode, players, startGame, resetGame, questions, MAX_PLAYERS } = useGame();
 
   return (
     <div className="screen">
@@ -15,11 +15,11 @@ export default function HostLobby() {
         <div className="lobby-code-panel">
           <p className="lobby-instructions">Players: open FibFest and join with this code</p>
           <div className="game-code-display">{gameCode}</div>
-          <p className="lobby-sub">fibfest.local:3000</p>
+          <p className="lobby-sub">abhiram-blitz.github.io/fibfest</p>
 
           <div className="lobby-meta">
             <span>📋 {questions.length} questions</span>
-            <span>👥 {players.length} / 20 players</span>
+            <span>👥 {players.length} / {MAX_PLAYERS} players</span>
           </div>
 
           <button
