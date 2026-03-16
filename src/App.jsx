@@ -5,11 +5,10 @@ import HostApp from './components/host/HostApp';
 import PlayerApp from './components/player/PlayerApp';
 
 function GameRouter() {
-  const { role, PHASE, phase } = useGame();
+  const { role } = useGame();
   if (role === 'host') return <HostApp />;
   if (role === 'player') return <PlayerApp />;
   return <Home />;
-  
 }
 
 export default function App() {

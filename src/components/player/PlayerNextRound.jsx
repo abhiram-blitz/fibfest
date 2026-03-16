@@ -10,6 +10,20 @@ export default function PlayerNextRound() {
   const me = players.find(p => p.id === playerId);
   const myScore = scores[playerId] || 0;
 
+  // If no game data, show leave button
+  if (!totalQuestions) {
+    return (
+      <div className="screen center">
+        <div className="card" style={{ maxWidth: 380, textAlign: 'center' }}>
+          <p className="waiting-message">No active game found.</p>
+          <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={resetGame}>
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="screen center">
       <div className="card" style={{ maxWidth: 400, textAlign: 'center' }}>
