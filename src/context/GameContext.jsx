@@ -342,15 +342,20 @@ export function GameProvider({ children }) {
 
     // Listen for game state updates from host
     const stateDbRef = ref(db, `games/${code}/state`);
+    let nullCount = 0;
     const handleState = onValue(stateDbRef, (snapshot) => {
       const remoteState = snapshot.val();
       if (!remoteState) {
-        // Game no longer exists — clear session and go home
-        clearSession();
-        cleanupListeners();
-        _setState(initState);
+        // Firebase may briefly emit null during a host write (set() replacement).
+        // Only treat the game as truly gone after multiple consecutive nulls.
+        nullCount++;
+        if (nullCount >= 3) {
+          clearSession();
+          _setState(initState);
+        }
         return;
       }
+      nullCount = 0; // reset on valid data
 
       setState(prev => {
         if (prev.role !== 'player') return prev;
