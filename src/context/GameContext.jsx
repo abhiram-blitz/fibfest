@@ -88,6 +88,8 @@ function mergeSimilarAnswers(fakeAnswers) {
   return groups;
 }
 
+const MAX_PLAYERS = 30;
+
 const PHASE = {
   HOME:         'home',
   LOBBY:        'lobby',
@@ -209,6 +211,7 @@ export function GameProvider({ children }) {
         hostUpdate(prev => {
           // Double-check inside updater to avoid race conditions
           if (prev.players.some(p => p.id === playerId)) return prev;
+          if (prev.players.length >= MAX_PLAYERS) return prev;
           const colorIndex = prev.players.length % PLAYER_COLORS.length;
           const newPlayers = [
             ...prev.players,
@@ -464,6 +467,7 @@ export function GameProvider({ children }) {
   const value = {
     ...state,
     PHASE,
+    MAX_PLAYERS,
     currentQuestion: state.questions[state.currentQuestionIndex],
     submittedCount: Object.keys(state.submissions).length,
     submissionCap,
