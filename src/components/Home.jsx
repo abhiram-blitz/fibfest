@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 
 export default function Home() {
-  const { createGame, joinGame, error } = useGame();
-  const [mode, setMode] = useState(null); // null | 'host' | 'join'
+  const { createGame, joinGame, error, pendingSession, rejoinSession, dismissSession, adminClearAllGames } = useGame();
+  const [mode, setMode] = useState(null); // null | 'host' | 'join' | 'admin'
   const [joinCode, setJoinCode] = useState('');
   const [name, setName] = useState('');
   const [numQ, setNumQ] = useState(10);
@@ -36,6 +36,47 @@ export default function Home() {
     if (joinCode.length < 4 || !name.trim()) return;
     joinGame(joinCode, name.trim());
   };
+
+  if (mode === 'admin') {
+    return (
+      <div className="screen center">
+        <div className="card" style={{ maxWidth: 420 }}>
+          <button className="btn-ghost back-btn" onClick={() => setMode(null)}>← Back</button>
+          <h2 className="card-title">Admin Panel</h2>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            const hashed = await hashPin(hostPin);
+            if (hashed !== HOST_PIN_HASH) {
+              setHostError('Incorrect host PIN');
+              return;
+            }
+            setHostError('');
+            adminClearAllGames();
+            setMode(null);
+          }} className="form-stack">
+            <label className="form-label">
+              Host PIN
+              <input
+                className="input input-code"
+                type="password"
+                placeholder="••••"
+                value={hostPin}
+                onChange={e => { setHostPin(e.target.value.slice(0, 4)); setHostError(''); }}
+                maxLength={4}
+                autoFocus
+                required
+              />
+            </label>
+            {hostError && <p className="error-text">{hostError}</p>}
+            <button type="submit" className="btn btn-lg" style={{ background: '#ef4444', color: '#fff' }} disabled={hostPin.length < 4}>
+              Clear All Games
+            </button>
+            <p className="hint-text" style={{ textAlign: 'center' }}>This will end all active games and clear the database.</p>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (mode === 'host') {
     return (
@@ -134,6 +175,23 @@ export default function Home() {
         </div>
         <p className="tagline">Lie. Guess. Fool your friends.</p>
 
+        {pendingSession && (
+          <div className="card" style={{ maxWidth: 400, marginBottom: '1.5rem', textAlign: 'center' }}>
+            <p style={{ marginBottom: '0.5rem', fontWeight: 600 }}>You were in a game!</p>
+            <p className="hint-text" style={{ marginBottom: '1rem' }}>
+              Game <strong>{pendingSession.gameCode}</strong> as <strong>{pendingSession.playerName}</strong>
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+              <button className="btn btn-primary" onClick={rejoinSession}>
+                Rejoin Game
+              </button>
+              <button className="btn btn-outline" onClick={dismissSession}>
+                Start Fresh
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="home-actions">
           <button className="btn btn-primary btn-xl" onClick={() => setMode('host')}>
             🎮 Host a Game
@@ -153,6 +211,14 @@ export default function Home() {
             <li>Score points for fooling friends — or spotting the truth!</li>
           </ol>
         </div>
+
+        <button
+          className="btn-ghost"
+          style={{ marginTop: '1rem', fontSize: '0.85rem', opacity: 0.6 }}
+          onClick={() => setMode('admin')}
+        >
+          Admin
+        </button>
       </div>
     </div>
   );

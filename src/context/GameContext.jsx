@@ -510,13 +510,39 @@ export function GameProvider({ children }) {
     setState(initState);
   }, [setState, cleanupListeners]);
 
-  // Auto-rejoin on mount if a saved session exists
+  // Check for saved session on mount (don't auto-rejoin, just store the pending session)
+  const [pendingSession, setPendingSession] = useState(null);
   useEffect(() => {
     const session = loadSession();
     if (!session) return;
-    const { gameCode, playerId, playerName } = session;
+    const { gameCode } = session;
 
-    // One-shot check if the game still exists in Firebase
+    // Verify game still exists
+    const stateDbRef = ref(db, `games/${gameCode}/state`);
+    get(stateDbRef).then(snapshot => {
+      const remoteState = snapshot.val();
+      if (!remoteState) {
+        clearSession();
+        return;
+      }
+      const players = toArray(remoteState.players);
+      const me = players.find(p => p.id === session.playerId);
+      if (!me) {
+        clearSession();
+        return;
+      }
+      setPendingSession(session);
+    }).catch(() => {
+      clearSession();
+    });
+  }, []);
+
+  // Rejoin a pending session (called explicitly by user)
+  const rejoinSession = useCallback(() => {
+    if (!pendingSession) return;
+    const { gameCode, playerId, playerName } = pendingSession;
+    setPendingSession(null);
+
     const stateDbRef = ref(db, `games/${gameCode}/state`);
     get(stateDbRef).then(snapshot => {
       const remoteState = snapshot.val();
@@ -525,15 +551,6 @@ export function GameProvider({ children }) {
         return;
       }
 
-      // Check if this player is still in the game
-      const players = toArray(remoteState.players);
-      const me = players.find(p => p.id === playerId);
-      if (!me) {
-        clearSession();
-        return;
-      }
-
-      // Rejoin: restore local state and re-attach listeners
       setState({
         ...initState,
         role: 'player',
@@ -541,10 +558,10 @@ export function GameProvider({ children }) {
         gameCode,
         playerId,
         playerName,
-        players,
+        players: toArray(remoteState.players),
         currentQuestionIndex: remoteState.currentQuestionIndex ?? 0,
         submissions: remoteState.submissions || {},
-        shuffledAnswers: toArray(remoteState.shuffledAnswers),
+        shuffledAnswers: remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
         votes: remoteState.votes || {},
         roundResults: remoteState.roundResults ? toArray(remoteState.roundResults) : null,
         scores: remoteState.scores || {},
@@ -553,15 +570,28 @@ export function GameProvider({ children }) {
         questions: toArray(remoteState.questions),
       });
 
-      // Notify host that player is back
       push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
-
       attachPlayerListeners(gameCode, playerId);
     }).catch(() => {
       clearSession();
+      setPendingSession(null);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSession, setState, attachPlayerListeners]);
+
+  // Dismiss pending session (start fresh)
+  const dismissSession = useCallback(() => {
+    clearSession();
+    setPendingSession(null);
   }, []);
+
+  // Admin: clear all games from Firebase
+  const adminClearAllGames = useCallback(() => {
+    remove(ref(db, 'games'));
+    clearSession();
+    cleanupListeners();
+    setState(initState);
+    setPendingSession(null);
+  }, [setState, cleanupListeners]);
 
   useEffect(() => {
     return () => cleanupListeners();
@@ -577,6 +607,10 @@ export function GameProvider({ children }) {
     submittedCount: Object.keys(state.submissions).length,
     submissionCap,
     votedCount: Object.keys(state.votes).length,
+    pendingSession,
+    rejoinSession,
+    dismissSession,
+    adminClearAllGames,
     createGame,
     joinGame,
     startGame,
