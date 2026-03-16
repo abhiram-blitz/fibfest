@@ -1,7 +1,7 @@
 import React, {
   createContext, useContext, useState, useEffect, useRef, useCallback,
 } from 'react';
-import { ref, update, push, get, onValue, onChildAdded, remove, onDisconnect } from 'firebase/database';
+import { ref, update, push, get, onChildAdded, remove, onDisconnect } from 'firebase/database';
 import { db } from '../firebase';
 import { sampleQuestions } from '../data/questions';
 
@@ -132,26 +132,6 @@ const initState = {
   error:                null,
   _currentQuestion:     null,
 };
-
-// Parse remote state from Firebase into local state shape
-function parseRemoteState(remoteState) {
-  const questions = toArray(remoteState.questions);
-  const idx = remoteState.currentQuestionIndex ?? 0;
-  return {
-    phase:                remoteState.phase,
-    players:              toArray(remoteState.players),
-    currentQuestionIndex: idx,
-    submissions:          remoteState.submissions || {},
-    shuffledAnswers:      remoteState.shuffledAnswers ? toArray(remoteState.shuffledAnswers) : [],
-    votes:                remoteState.votes || {},
-    roundResults:         remoteState.roundResults ? toArray(remoteState.roundResults) : null,
-    scores:               remoteState.scores || {},
-    roundScores:          remoteState.roundScores || {},
-    totalQuestions:       remoteState.totalQuestions,
-    questions,
-    _currentQuestion:     remoteState.currentQuestion || questions[idx] || null,
-  };
-}
 
 // ── provider ───────────────────────────────────────────────────────────────
 export function GameProvider({ children }) {
@@ -324,70 +304,69 @@ export function GameProvider({ children }) {
     const code = gameCode.toUpperCase().trim();
     const playerId = randId();
 
-    setState({
-      ...initState,
-      role: 'player',
-      phase: PHASE.LOBBY,
-      gameCode: code,
-      playerId,
-      playerName: name,
-      scores: { [playerId]: 0 },
+    // Fetch game data once from Firebase
+    const stateDbRef = ref(db, `games/${code}/state`);
+    get(stateDbRef).then(snapshot => {
+      const remoteState = snapshot.val();
+      if (!remoteState) {
+        setState(prev => ({ ...prev, error: 'Game not found' }));
+        return;
+      }
+
+      const questions = toArray(remoteState.questions);
+      setState({
+        ...initState,
+        role: 'player',
+        phase: PHASE.ANSWERING,
+        gameCode: code,
+        playerId,
+        playerName: name,
+        questions,
+        totalQuestions: remoteState.totalQuestions || questions.length,
+        currentQuestionIndex: 0,
+        scores: { [playerId]: 0 },
+        _currentQuestion: questions[0] || null,
+      });
+
+      saveSession(code, playerId, name);
+
+      // Send join action to host
+      const actionsRef = ref(db, `games/${code}/actions`);
+      push(actionsRef, { type: 'JOIN', playerId, name });
+
+      // Set up disconnect presence
+      attachPlayerListeners(code, playerId);
+    }).catch(() => {
+      setState(prev => ({ ...prev, error: 'Could not connect to game' }));
     });
+  }, [setState, attachPlayerListeners]);
 
-    saveSession(code, playerId, name);
-
-    const actionsRef = ref(db, `games/${code}/actions`);
-    push(actionsRef, { type: 'JOIN', playerId, name });
-
-    attachPlayerListeners(code, playerId);
-  }, [setState, cleanupListeners]);
-
-  // Shared: start polling Firebase for game state (replaces broken onValue listener)
+  // Player: set up presence (onDisconnect only, no state syncing)
   const attachPlayerListeners = useCallback((code, playerId) => {
     const leaveRef = push(ref(db, `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
+  }, []);
 
-    // Poll Firebase every 2 seconds for state updates
-    const stateDbRef = ref(db, `games/${code}/state`);
-    const poll = setInterval(() => {
-      get(stateDbRef).then(snapshot => {
-        const remoteState = snapshot.val();
-        if (!remoteState) return;
-        setState(prev => {
-          if (prev.role !== 'player') return prev;
-          return { ...prev, ...parseRemoteState(remoteState) };
-        });
-      }).catch(() => {});
-    }, 2000);
-
-    // Also do an immediate first fetch
-    get(stateDbRef).then(snapshot => {
-      const remoteState = snapshot.val();
-      if (!remoteState) return;
-      setState(prev => {
-        if (prev.role !== 'player') return prev;
-        return { ...prev, ...parseRemoteState(remoteState) };
-      });
-    }).catch(() => {});
-
-    unsubscribesRef.current.push(() => clearInterval(poll));
+  // Player: advance to the next question locally (no Firebase needed)
+  const playerNextQuestion = useCallback(() => {
+    setState(prev => {
+      const nextIdx = prev.currentQuestionIndex + 1;
+      if (nextIdx >= prev.totalQuestions) {
+        return { ...prev, phase: PHASE.FINAL };
+      }
+      return {
+        ...prev,
+        phase: PHASE.ANSWERING,
+        currentQuestionIndex: nextIdx,
+        submissions: {},
+        votes: {},
+      };
+    });
   }, [setState]);
 
-  // Player: manually sync state from Firebase
-  const syncState = useCallback(() => {
-    const { gameCode, role } = stateRef.current;
-    if (role !== 'player' || !gameCode) return;
-
-    const stateDbRef = ref(db, `games/${gameCode}/state`);
-    get(stateDbRef).then(snapshot => {
-      const remoteState = snapshot.val();
-      if (!remoteState) return;
-
-      setState(prev => {
-        if (prev.role !== 'player') return prev;
-        return { ...prev, ...parseRemoteState(remoteState) };
-      });
-    });
+  // Player: mark that voting is done (show "next question" screen)
+  const playerDoneVoting = useCallback(() => {
+    setState(prev => ({ ...prev, phase: 'voted' }));
   }, [setState]);
 
   // Host: start the game
@@ -561,13 +540,19 @@ export function GameProvider({ children }) {
         return;
       }
 
+      const questions = toArray(remoteState.questions);
       setState({
         ...initState,
         role: 'player',
+        phase: PHASE.ANSWERING,
         gameCode,
         playerId,
         playerName,
-        ...parseRemoteState(remoteState),
+        questions,
+        totalQuestions: remoteState.totalQuestions || questions.length,
+        currentQuestionIndex: 0,
+        scores: { [playerId]: 0 },
+        _currentQuestion: questions[0] || null,
       });
 
       push(ref(db, `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
@@ -611,7 +596,8 @@ export function GameProvider({ children }) {
     rejoinSession,
     dismissSession,
     adminClearAllGames,
-    syncState,
+    playerNextQuestion,
+    playerDoneVoting,
     createGame,
     joinGame,
     startGame,

@@ -16,11 +16,14 @@ function QuestionText({ text }) {
 }
 
 export default function PlayerAnswer() {
-  const { currentQuestion, playerId, submissions, submitAnswer, players, playerName, submittedCount, submissionCap } = useGame();
+  const {
+    currentQuestion, playerId, submissions, submitAnswer, players,
+    scores, currentQuestionIndex, totalQuestions,
+  } = useGame();
   const [answer, setAnswer] = useState('');
   const hasSubmitted = !!submissions[playerId];
-  const submissionsClosed = submittedCount >= submissionCap && !hasSubmitted;
   const me = players.find(p => p.id === playerId);
+  const myScore = scores[playerId] || 0;
 
   useEffect(() => { setAnswer(''); }, [currentQuestion?.id]);
 
@@ -39,24 +42,22 @@ export default function PlayerAnswer() {
     </div>
   );
 
-  if (submissionsClosed) {
-    return (
-      <div className="screen center">
-        <div className="card" style={{ maxWidth: 380 }}>
-          <div className="submitted-state">
-            <span className="submitted-icon">⏳</span>
-            <h3>Submissions closed!</h3>
-            <p className="hint-text">Enough answers are in — voting starts soon.</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const scoreBar = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+      <span style={{ fontSize: '0.85rem', opacity: 0.6 }}>
+        Q{currentQuestionIndex + 1}/{totalQuestions}
+      </span>
+      <span style={{ fontSize: '0.9rem', fontWeight: 600, color: me?.color }}>
+        {myScore} pts
+      </span>
+    </div>
+  );
 
   if (hasSubmitted) {
     return (
       <div className="screen center">
         <div className="card" style={{ maxWidth: 380 }}>
+          {scoreBar}
           <div className="submitted-state">
             <span className="submitted-icon">✅</span>
             <h3>Fib submitted!</h3>
@@ -73,6 +74,7 @@ export default function PlayerAnswer() {
   return (
     <div className="screen center">
       <div className="card player-answer-card">
+        {scoreBar}
         <div className="question-category-sm">{currentQuestion.category}</div>
         <QuestionText text={currentQuestion.text} />
 
