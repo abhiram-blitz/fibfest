@@ -323,7 +323,7 @@ export function GameProvider({ children }) {
       setState({
         ...initState,
         role: 'player',
-        phase: PHASE.ANSWERING,
+        phase: PHASE.LOBBY,
         gameCode: code,
         playerId,
         playerName: name,
@@ -346,6 +346,11 @@ export function GameProvider({ children }) {
       setState(prev => ({ ...prev, error: 'Could not connect to game' }));
     });
   }, [setState, attachPlayerListeners]);
+
+  // Player: start playing (move from lobby to first question)
+  const playerStartGame = useCallback(() => {
+    setState(prev => ({ ...prev, phase: PHASE.ANSWERING }));
+  }, [setState]);
 
   // Player: advance to the next question locally (no Firebase needed)
   const playerNextQuestion = useCallback(() => {
@@ -544,7 +549,7 @@ export function GameProvider({ children }) {
       setState({
         ...initState,
         role: 'player',
-        phase: PHASE.ANSWERING,
+        phase: PHASE.LOBBY,
         gameCode,
         playerId,
         playerName,
@@ -596,6 +601,7 @@ export function GameProvider({ children }) {
     rejoinSession,
     dismissSession,
     adminClearAllGames,
+    playerStartGame,
     playerNextQuestion,
     playerDoneVoting,
     createGame,

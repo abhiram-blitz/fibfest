@@ -2,35 +2,28 @@ import React from 'react';
 import { useGame } from '../../context/GameContext';
 
 export default function PlayerLobby() {
-  const { playerName, gameCode, players, resetGame } = useGame();
-  const me = players.find(p => p.name === playerName);
+  const { playerName, gameCode, resetGame, playerStartGame } = useGame();
 
   return (
     <div className="screen center">
-      <div className="card" style={{ maxWidth: 380 }}>
+      <div className="card" style={{ maxWidth: 380, textAlign: 'center' }}>
         <button className="btn-ghost back-btn" onClick={resetGame}>← Leave</button>
 
-        <div className="player-avatar" style={{ background: me?.color || '#666' }}>
-          {playerName?.[0]?.toUpperCase()}
-        </div>
+        <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>🎭</div>
         <h2 className="card-title">{playerName}</h2>
         <p className="hint-text">You're in game <strong>{gameCode}</strong></p>
 
-        <div className="waiting-pulse">
-          <span className="pulse-dot" />
-          Waiting for host to start...
-        </div>
+        <p className="hint-text" style={{ marginTop: '1.5rem' }}>
+          Wait for the host to start the game, then tap below.
+        </p>
 
-        <div className="lobby-players-sm">
-          <p className="hint-text">{players.length} player{players.length !== 1 ? 's' : ''} joined:</p>
-          <div className="player-grid-sm">
-            {players.map(p => (
-              <span key={p.id} className="player-chip-sm" style={{ background: p.color }}>
-                {p.name}
-              </span>
-            ))}
-          </div>
-        </div>
+        <button
+          className="btn btn-primary btn-lg"
+          style={{ width: '100%', marginTop: '1rem' }}
+          onClick={playerStartGame}
+        >
+          Start Playing
+        </button>
       </div>
     </div>
   );
