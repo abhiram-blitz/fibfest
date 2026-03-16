@@ -4,7 +4,7 @@ import { useGame } from '../../context/GameContext';
 export default function PlayerResults() {
   const {
     roundResults, players, roundScores, scores, playerId,
-    currentQuestionIndex, questions, phase, PHASE,
+    currentQuestionIndex, questions, phase, PHASE, syncState,
   } = useGame();
 
   const me = players.find(p => p.id === playerId);
@@ -44,6 +44,12 @@ export default function PlayerResults() {
               </div>
             ))}
           </div>
+          <button className="btn btn-primary" style={{ marginTop: '1.5rem', width: '100%' }} onClick={syncState}>
+            Next Question
+          </button>
+          <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
+            Works once the host starts the next round
+          </p>
         </div>
       </div>
     );
@@ -115,6 +121,12 @@ export default function PlayerResults() {
             </div>
           ))}
         </div>
+        <button className="btn btn-primary" style={{ marginTop: '1.5rem', width: '100%' }} onClick={syncState}>
+          Next Question
+        </button>
+        <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
+          Works once the host starts the next round
+        </p>
       </div>
     </div>
   );

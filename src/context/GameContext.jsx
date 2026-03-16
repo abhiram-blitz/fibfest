@@ -342,30 +342,38 @@ export function GameProvider({ children }) {
     attachPlayerListeners(code, playerId);
   }, [setState, cleanupListeners]);
 
-  // Shared: attach Firebase listeners for a player session
+  // Shared: start polling Firebase for game state (replaces broken onValue listener)
   const attachPlayerListeners = useCallback((code, playerId) => {
     const leaveRef = push(ref(db, `games/${code}/actions`));
     onDisconnect(leaveRef).set({ type: 'LEAVE', playerId });
 
-    // Listen for game state updates from host
+    // Poll Firebase every 2 seconds for state updates
     const stateDbRef = ref(db, `games/${code}/state`);
-    const unsub = onValue(stateDbRef, (snapshot) => {
-      const remoteState = snapshot.val();
-      // Ignore null snapshots entirely — they're transient during writes
-      // Game deletion is handled by admin reset, not by watching for nulls
-      if (!remoteState) return;
+    const poll = setInterval(() => {
+      get(stateDbRef).then(snapshot => {
+        const remoteState = snapshot.val();
+        if (!remoteState) return;
+        setState(prev => {
+          if (prev.role !== 'player') return prev;
+          return { ...prev, ...parseRemoteState(remoteState) };
+        });
+      }).catch(() => {});
+    }, 2000);
 
+    // Also do an immediate first fetch
+    get(stateDbRef).then(snapshot => {
+      const remoteState = snapshot.val();
+      if (!remoteState) return;
       setState(prev => {
         if (prev.role !== 'player') return prev;
         return { ...prev, ...parseRemoteState(remoteState) };
       });
-    });
+    }).catch(() => {});
 
-    // Store the actual unsubscribe function
-    unsubscribesRef.current.push(unsub);
+    unsubscribesRef.current.push(() => clearInterval(poll));
   }, [setState]);
 
-  // Player: manually sync state from Firebase (fallback if listener missed an update)
+  // Player: manually sync state from Firebase
   const syncState = useCallback(() => {
     const { gameCode, role } = stateRef.current;
     if (role !== 'player' || !gameCode) return;
