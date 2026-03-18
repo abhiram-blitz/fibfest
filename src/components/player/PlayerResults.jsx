@@ -1,14 +1,57 @@
-import React from 'react';
+import { useState } from 'react';
+import { ref, get } from 'firebase/database';
+import { getDb } from '../../firebase';
 import { useGame } from '../../context/GameContext';
 
 export default function PlayerResults() {
   const {
     roundResults, players, roundScores, scores, playerId,
-    currentQuestionIndex, questions, phase, PHASE, syncState,
+    currentQuestionIndex, questions, phase, PHASE,
+    playerNextQuestion, gameCode,
   } = useGame();
+
+  const [status, setStatus] = useState('idle'); // idle | checking | waiting
 
   const me = players.find(p => p.id === playerId);
   const isLeaderboard = phase === PHASE.LEADERBOARD;
+
+  const handleNext = async () => {
+    setStatus('checking');
+    try {
+      const snap = await get(ref(getDb(), `games/${gameCode}/state`));
+      const remote = snap.val();
+      if (remote && remote.currentQuestionIndex > currentQuestionIndex) {
+        playerNextQuestion();
+      } else {
+        setStatus('waiting');
+        setTimeout(() => setStatus('idle'), 2500);
+      }
+    } catch {
+      setStatus('idle');
+    }
+  };
+
+  const nextBtn = (
+    <>
+      <button
+        className="btn btn-primary"
+        style={{ marginTop: '1.5rem', width: '100%' }}
+        onClick={handleNext}
+        disabled={status === 'checking'}
+      >
+        {status === 'checking' ? 'Checking...' : 'Next Question'}
+      </button>
+      {status === 'waiting' ? (
+        <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center', color: 'var(--muted)' }}>
+          Host hasn't started the next round yet — try again in a moment.
+        </p>
+      ) : (
+        <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
+          Works once the host starts the next round
+        </p>
+      )}
+    </>
+  );
 
   // Leaderboard view
   if (isLeaderboard || !roundResults) {
@@ -44,12 +87,7 @@ export default function PlayerResults() {
               </div>
             ))}
           </div>
-          <button className="btn btn-primary" style={{ marginTop: '1.5rem', width: '100%' }} onClick={syncState}>
-            Next Question
-          </button>
-          <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
-            Works once the host starts the next round
-          </p>
+          {nextBtn}
         </div>
       </div>
     );
@@ -121,12 +159,7 @@ export default function PlayerResults() {
             </div>
           ))}
         </div>
-        <button className="btn btn-primary" style={{ marginTop: '1.5rem', width: '100%' }} onClick={syncState}>
-          Next Question
-        </button>
-        <p className="hint-text" style={{ marginTop: '0.5rem', fontSize: '0.8rem', textAlign: 'center' }}>
-          Works once the host starts the next round
-        </p>
+        {nextBtn}
       </div>
     </div>
   );
