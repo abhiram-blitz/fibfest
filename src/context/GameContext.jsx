@@ -587,6 +587,81 @@ export function GameProvider({ children }) {
     return () => cleanupListeners();
   }, [cleanupListeners]);
 
+  // ── Player: poll Firebase for host state transitions ──────────────────
+  useEffect(() => {
+    if (state.role !== 'player' || !state.gameCode) return;
+
+    const poll = async () => {
+      try {
+        const snap = await get(ref(getDb(), `games/${stateRef.current.gameCode}/state`));
+        const remote = snap.val();
+        if (!remote) return;
+
+        const local = stateRef.current;
+
+        // Player submitted answer, host moved to VOTING → pull shuffledAnswers
+        if (
+          local.phase === PHASE.ANSWERING &&
+          local.submissions[local.playerId] &&
+          remote.phase === PHASE.VOTING
+        ) {
+          setState(prev => ({
+            ...prev,
+            phase: PHASE.VOTING,
+            shuffledAnswers: toArray(remote.shuffledAnswers),
+          }));
+          return;
+        }
+
+        // Player is voting or done voting → sync scores/results when host reveals
+        if (
+          (local.phase === PHASE.VOTING || local.phase === 'voted') &&
+          (remote.phase === PHASE.RESULTS || remote.phase === PHASE.LEADERBOARD)
+        ) {
+          setState(prev => ({
+            ...prev,
+            // Keep 'voted' if player already voted; otherwise stay in VOTING
+            phase: prev.phase === 'voted' ? 'voted' : prev.phase,
+            roundResults: remote.roundResults ? toArray(remote.roundResults) : prev.roundResults,
+            scores: remote.scores || prev.scores,
+            roundScores: remote.roundScores || prev.roundScores,
+            players: toArray(remote.players).length > 0 ? toArray(remote.players) : prev.players,
+          }));
+          return;
+        }
+
+        // Sync scores/players when player is on results/leaderboard screens
+        if (local.phase === 'voted' || local.phase === PHASE.RESULTS || local.phase === PHASE.LEADERBOARD) {
+          const remotePlayers = toArray(remote.players);
+          if (remote.scores || remotePlayers.length > 0) {
+            setState(prev => ({
+              ...prev,
+              scores: remote.scores || prev.scores,
+              roundScores: remote.roundScores || prev.roundScores,
+              roundResults: remote.roundResults ? toArray(remote.roundResults) : prev.roundResults,
+              players: remotePlayers.length > 0 ? remotePlayers : prev.players,
+            }));
+          }
+        }
+
+        // Host reached FINAL → end game for player too
+        if (remote.phase === PHASE.FINAL && local.phase !== PHASE.FINAL) {
+          setState(prev => ({
+            ...prev,
+            phase: PHASE.FINAL,
+            scores: remote.scores || prev.scores,
+            players: toArray(remote.players).length > 0 ? toArray(remote.players) : prev.players,
+          }));
+        }
+      } catch {}
+    };
+
+    // Poll immediately, then every 2 seconds
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [state.role, state.gameCode, state.phase, setState]);
+
   const submissionCap = getSubmissionCap(state.players.length);
 
   const value = {

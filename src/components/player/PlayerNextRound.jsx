@@ -1,14 +1,34 @@
-import React from 'react';
+import { useState } from 'react';
+import { ref, get } from 'firebase/database';
+import { getDb } from '../../firebase';
 import { useGame } from '../../context/GameContext';
 
 export default function PlayerNextRound() {
   const {
     playerNextQuestion, scores, playerId, players,
-    currentQuestionIndex, totalQuestions, resetGame,
+    currentQuestionIndex, totalQuestions, resetGame, gameCode,
   } = useGame();
+
+  const [status, setStatus] = useState('idle');
 
   const me = players.find(p => p.id === playerId);
   const myScore = scores[playerId] || 0;
+
+  const handleNext = async () => {
+    setStatus('checking');
+    try {
+      const snap = await get(ref(getDb(), `games/${gameCode}/state`));
+      const remote = snap.val();
+      if (remote && remote.currentQuestionIndex > currentQuestionIndex) {
+        playerNextQuestion();
+      } else {
+        setStatus('waiting');
+        setTimeout(() => setStatus('idle'), 2500);
+      }
+    } catch {
+      setStatus('idle');
+    }
+  };
 
   // If no game data, show leave button
   if (!totalQuestions) {
@@ -44,10 +64,17 @@ export default function PlayerNextRound() {
         <button
           className="btn btn-primary btn-lg"
           style={{ width: '100%' }}
-          onClick={playerNextQuestion}
+          onClick={handleNext}
+          disabled={status === 'checking'}
         >
-          Next Question
+          {status === 'checking' ? 'Checking...' : 'Next Question'}
         </button>
+
+        {status === 'waiting' && (
+          <p className="hint-text" style={{ marginTop: '0.5rem', color: 'var(--muted)' }}>
+            Host hasn't started the next round yet — try again in a moment.
+          </p>
+        )}
 
         <button
           className="btn-ghost"
