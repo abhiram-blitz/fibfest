@@ -331,7 +331,7 @@ export function GameProvider({ children }) {
         totalQuestions: remoteState.totalQuestions || questions.length,
         currentQuestionIndex: 0,
         scores: { [playerId]: 0 },
-        _currentQuestion: questions[0] || null,
+        _currentQuestion: null,
       });
 
       saveSession(code, playerId, name);
@@ -557,7 +557,7 @@ export function GameProvider({ children }) {
         totalQuestions: remoteState.totalQuestions || questions.length,
         currentQuestionIndex: 0,
         scores: { [playerId]: 0 },
-        _currentQuestion: questions[0] || null,
+        _currentQuestion: null,
       });
 
       push(ref(getDb(), `games/${gameCode}/actions`), { type: 'REJOIN', playerId });
@@ -599,10 +599,9 @@ export function GameProvider({ children }) {
 
         const local = stateRef.current;
 
-        // Player submitted answer, host moved to VOTING → pull shuffledAnswers
+        // Host moved to VOTING → pull shuffledAnswers (whether player submitted or not)
         if (
           local.phase === PHASE.ANSWERING &&
-          local.submissions[local.playerId] &&
           remote.phase === PHASE.VOTING
         ) {
           setState(prev => ({
@@ -668,7 +667,7 @@ export function GameProvider({ children }) {
     ...state,
     PHASE,
     MAX_PLAYERS,
-    currentQuestion: state._currentQuestion || state.questions[state.currentQuestionIndex] || null,
+    currentQuestion: state.questions[state.currentQuestionIndex] || null,
     submittedCount: Object.keys(state.submissions).length,
     submissionCap,
     votedCount: Object.keys(state.votes).length,
